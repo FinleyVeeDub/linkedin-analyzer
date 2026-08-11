@@ -101,6 +101,30 @@ timeout; the first tool call may answer "not ready yet" for a few seconds.
 | `SESSION_ENCRYPTION_KEY_FILE` | `~/.linkedin-analyzer/session.key` | Key file, created automatically if missing |
 | `BROWSER_HEADLESS` | `False` | `True` for automated/headless runs |
 
+> [!INFO] Port `8766` may already be occupied
+>
+> `8766` is only the **default** port of the background server. On machines
+> where another service already binds it (e.g. the **Hermes** agent reserves
+> `8766`, in which case the analyzer was moved to `8767`), LM Studio simply
+> cannot reach the daemon and the MCP tools fail with a connection error.
+> Fix: pick a free port and set `PORT` **in `.env`** before starting, e.g.
+> `PORT=8767`. The change is picked up on the next `start-daemon.sh` / LM
+> Studio restart — nothing else needs to be edited.
+>
+> **Where the `8766` fallback is hard-coded** (if you ever need to change the
+> default itself, not just override it):
+>
+> | File | Line | Usage |
+> |------|------|-------|
+> | `config.py` | 13 | Pydantic default for `PORT` |
+> | `background_server.py` | 1143 | Daemon bind port (`PORT` env, fallback `8766`) |
+> | `mcp-server/linkedin_mcp.py` | 74 | MCP server's base URL to the daemon (`PORT` env, fallback `8766`) |
+> | `scripts/linkedin-analyzer-mcp-wrapper.sh` | 50 | Wrapper default |
+> | `scripts/bootstrap.sh` | 39 | Bootstrap default |
+> | `scripts/install.sh` | 40 | Service install default |
+> | `start-daemon.sh` | 8 | Daemon start default |
+> | `.env.example` | 6 | Documented default |
+
 ## Running
 
 ### Option A — Start the daemon manually
