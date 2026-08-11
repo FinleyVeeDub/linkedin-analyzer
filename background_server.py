@@ -242,7 +242,10 @@ class BrowserManager:
         return False
 
     async def check_login(self) -> bool:
-        """Fast login check – does NOT navigate."""
+        """Fast login check – does NOT navigate. Self-heals a closed browser."""
+        if self.browser is not None and not self.browser.is_connected():
+            # Browser window was closed externally – relaunch and reload session.
+            await self.restart()
         if not self.page:
             return False
         try:
@@ -1083,15 +1086,18 @@ async def login():
     if not browser_mgr:
         return {"error": NOT_READY}
     async with browser_mgr.page_lock:
-        if await browser_mgr.check_login():
-            await browser_mgr.save()
-            return {"logged_in": True, "message": "Already logged in"}
-        await browser_mgr._goto_with_fallback(settings.LINKEDIN_LOGIN_URL)
-        await browser_mgr.dismiss_cookie_consent()
-        return {
-            "logged_in": False,
-            "message": "Browser open at login page. Log in manually – session auto-saves.",
-        }
+        logged_in = await browser_mgr.check_login()
+        if not logged_in:
+            if not browser_mgr.browser or not browser_mgr.browser.is_connected():
+                return {"error": "Browser closed and relaunch failed. Call POST /login."}
+            await browser_mgr._goto_with_fallback(settings.LINKEDIN_LOGIN_URL)
+            await browser_mgr.dismiss_cookie_consent()
+            return {
+                "logged_in": False,
+                "message": "Browser open at login page. Log in manually – session auto-saves.",
+            }
+        await browser_mgr.save()
+        return {"logged_in": True, "message": "Already logged in"}
 
 
 @app.post("/save")
