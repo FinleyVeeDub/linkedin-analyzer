@@ -1,5 +1,9 @@
 # LinkedIn Analyzer
 
+[![License](https://img.shields.io/github/license/FinleyVeeDub/linkedin-analyzer)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/FinleyVeeDub/linkedin-analyzer)](https://github.com/FinleyVeeDub/linkedin-analyzer/releases)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+
 Analyze your own LinkedIn profile through [LM Studio](https://lmstudio.ai/) using an MCP server and Playwright — **without** the official LinkedIn API.
 
 The tool reuses your existing browser session (including 2FA) to fetch your profile data as structured JSON, which a local LLM can then analyze for optimization opportunities.
