@@ -72,12 +72,22 @@ to also remove the venv and saved sessions).
 > `sudo apt-get install -y python3-venv` — the scripts tell you this if it is
 > missing.
 
+> [!NOTE] Playwright installs its own browser
+>
+> Playwright downloads a managed **Chrome for Testing** build into `venv/`
+> (first run: ~150 MB) and launches that — you do **not** need a separate
+> Chrome/Chromium installation. `install.sh`, `bootstrap.sh` and the LM Studio
+> wrapper all run `venv/bin/python -m playwright install chromium` for you.
+> If the browser is ever missing or broken, reinstall it with
+> `venv/bin/python -m playwright install chromium`.
+
 ### What gets installed
 
 | Service | Where | Purpose |
 |---------|-------|---------|
 | Python virtualenv | `venv/` | Isolated Python environment |
 | Python deps + Playwright browser | `venv/` | The only external dependencies |
+| Playwright **Chrome for Testing** | `venv/` | Managed Chromium downloaded by Playwright (no system Chrome needed) |
 | Session encryption key | `~/.linkedin-analyzer/session.key` | Encrypts the saved session |
 | Background server **service** | launchd agent / systemd user unit | Keeps the browser open, auto-starts on boot |
 | MCP server entry | `~/.lmstudio/mcp.json` | Lets LM Studio launch the MCP server |
