@@ -10,7 +10,7 @@ import os
 class Settings(BaseSettings):
     # Server Settings
     HOST: str = "127.0.0.1"
-    PORT: int = 8000
+    PORT: int = 8766
 
     # LinkedIn Settings
     LINKEDIN_URL: str = "https://www.linkedin.com"

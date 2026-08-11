@@ -36,7 +36,7 @@ The tool reuses your existing browser session (including 2FA) to fetch your prof
 - Python 3.10+
 - [LM Studio](https://lmstudio.ai/) (local)
 - A LinkedIn account (you will log in manually once)
-- **Chrome for Testing** (recommended): the project uses Playwright's browser automation, and having [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) installed makes Playwright (and therefore the MCP server) work most reliably. It avoids conflicts with your regular Chrome profile and is the version Playwright is tested against. If you prefer a fully managed setup, `playwright install chromium` (step 4 below) downloads and manages the browser for you.
+- **Playwright browser**: the project drives the browser via Playwright. Run `playwright install chromium` (step 4 below) once — it downloads a managed [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) build automatically. **No separate Chrome or Chrome for Testing installation is required.**
 
 ## Installation
 
@@ -167,6 +167,7 @@ curl -X POST http://127.0.0.1:8766/login       # log in again in the opened brow
 **Browser does not open**
 - Make sure `BROWSER_HEADLESS=False` in `.env` (or unset).
 - Reinstall the browser: `playwright install chromium`
+- On Linux only, you may also need system libraries: `playwright install-deps`
 
 **Server not reachable**
 - Is it running? `curl http://127.0.0.1:8766/health`
