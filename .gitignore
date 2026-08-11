@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Browser Sessions - NEVER COMMIT. Contains encrypted login cookies (ciphertext).
+# Committing this leaks session material even though it is encrypted.
+browser_sessions/
+browser_sessions/*.json
+*.session.json
+*session*.json
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# PID files
+*.pid
+
+# Encryption keys
+*.key
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
