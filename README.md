@@ -91,7 +91,7 @@ curl http://127.0.0.1:8766/health
 
 ### Option B — Auto-start wrapper (recommended for LM Studio)
 
-Use `scripts/linkedin-mcp-wrapper.sh` as the MCP command in LM Studio. It
+Use `scripts/linkedin-analyzer-mcp-wrapper.sh` as the MCP command in LM Studio. It
 ensures a session key exists, starts the background server if needed, waits
 until it is healthy, then runs the MCP server:
 
@@ -99,12 +99,17 @@ until it is healthy, then runs the MCP server:
 {
   "mcpServers": {
     "linkedin-analyzer": {
-      "command": "/path/to/linkedin-analyzer/scripts/linkedin-mcp-wrapper.sh",
+      "command": "/path/to/linkedin-analyzer/scripts/linkedin-analyzer-mcp-wrapper.sh",
       "args": ["--stdio"]
     }
   }
 }
 ```
+
+> **Note:** point the `command` at the **full absolute path** of the wrapper inside
+> your clone (the wrapper derives all other paths from its own location). If LM
+> Studio reports it cannot start the server, the path is almost always wrong —
+> e.g. a `command not found` from a stale filename.
 
 ## Setup in LM Studio
 
@@ -188,7 +193,7 @@ linkedin-analyzer/
 ├── mcp-server/
 │   └── linkedin_mcp.py         # MCP server for LM Studio (stdio)
 ├── scripts/
-│   └── linkedin-mcp-wrapper.sh # Optional auto-start wrapper for LM Studio
+│   └── linkedin-analyzer-mcp-wrapper.sh # Optional auto-start wrapper for LM Studio
 ├── docs/
 │   ├── system-prompt.en.md     # English system prompt for LM Studio
 │   └── system-prompt.de.md     # German system prompt for LM Studio
