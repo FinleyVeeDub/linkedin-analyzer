@@ -1,101 +1,208 @@
 #!/usr/bin/env python3
 """
-LinkedIn MCP Server - Client for Docker Background Server.
+LinkedIn MCP Server - stdio JSON-RPC client for the LinkedIn background server.
+
+Runs the Model Context Protocol over stdin/stdout (newline-delimited JSON-RPC)
+exactly as LM Studio expects. Pure standard library: it must start and answer
+`initialize`/`tools/list`/`ping` even before any third-party dependency or the
+background daemon is ready, so a first run in LM Studio never fails on imports.
+
+Protocol notes (2024-11-05):
+  * Never emit anything to stdout before an `initialize` request.
+  * Never respond to a notification (a message without an `id`).
+  * `ping` is answered with an empty result; `shutdown` + `notifications/exit`
+    terminates the loop cleanly.
+  * If the background server is unreachable, tools return a JSON error *as the
+    tool result* instead of crashing the connection.
 """
-import asyncio
 import json
+import os
 import sys
-import httpx
+import urllib.error
+import urllib.request
 
-MCP_SERVER_NAME = "linkedin-analyzer"
-MCP_SERVER_VERSION = "1.0.0"
-BACKGROUND_URL = "http://127.0.0.1:8766"
+SERVER_NAME = "linkedin-analyzer"
+SERVER_VERSION = "2.0.0"
+PROTOCOL_VERSION = "2024-11-05"
+KNOWN_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
 
-async def http_call(method: str, path: str) -> dict:
-    async with httpx.AsyncClient(base_url=BACKGROUND_URL, timeout=120.0) as client:
-        if method == "GET":
-            r = await client.get(path)
-        elif method == "POST":
-            r = await client.post(path)
-        elif method == "DELETE":
-            r = await client.delete(path)
-        else:
-            return {"error": f"Unknown method: {method}"}
-        return r.json()
+TOOLS = [
+    {
+        "name": "linkedin_get_profile",
+        "description": "Get LinkedIn profile data.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "linkedin_check_session",
+        "description": "Check login status.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "linkedin_login",
+        "description": "Open browser at LinkedIn login. Browser STAYS OPEN.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "linkedin_save_session",
+        "description": "Save session.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "linkedin_analyze_profile",
+        "description": "Get profile with analysis prompt.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "linkedin_clear_session",
+        "description": "Clear session.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+]
 
-async def handle_message(message: dict) -> dict | None:
-    method = message.get("method", "")
-    params = message.get("params", {})
-    msg_id = message.get("id")
-    
-    if method == "initialize":
-        return {
-            "jsonrpc": "2.0", "id": msg_id,
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION},
-            },
-        }
-    elif method == "tools/list":
-        return {
-            "jsonrpc": "2.0", "id": msg_id,
-            "result": {
-                "tools": [
-                    {"name": "linkedin_get_profile", "description": "Get LinkedIn profile data.", "inputSchema": {"type": "object", "properties": {}}},
-                    {"name": "linkedin_check_session", "description": "Check login status.", "inputSchema": {"type": "object", "properties": {}}},
-                    {"name": "linkedin_login", "description": "Open browser at LinkedIn login. Browser STAYS OPEN.", "inputSchema": {"type": "object", "properties": {}}},
-                    {"name": "linkedin_save_session", "description": "Save session.", "inputSchema": {"type": "object", "properties": {}}},
-                    {"name": "linkedin_analyze_profile", "description": "Get profile with analysis prompt.", "inputSchema": {"type": "object", "properties": {}}},
-                    {"name": "linkedin_clear_session", "description": "Clear session.", "inputSchema": {"type": "object", "properties": {}}},
-                ],
-            },
-        }
-    elif method == "tools/call":
-        name = params.get("name", "")
-        if name == "linkedin_get_profile":
-            result = await http_call("GET", "/profile")
-        elif name == "linkedin_check_session":
-            result = await http_call("GET", "/check")
-        elif name == "linkedin_login":
-            result = await http_call("POST", "/login")
-        elif name == "linkedin_save_session":
-            result = await http_call("POST", "/save")
-        elif name == "linkedin_analyze_profile":
-            result = await http_call("GET", "/profile")
-        elif name == "linkedin_clear_session":
-            result = await http_call("DELETE", "/session")
-        else:
-            result = {"error": f"Unknown tool: {name}"}
-        return {
-            "jsonrpc": "2.0", "id": msg_id,
-            "result": {"content": [{"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}]},
-        }
-    elif method == "notifications/initialized":
-        return None
-    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}
+TOOL_ENDPOINTS = {
+    "linkedin_get_profile": ("GET", "/profile"),
+    "linkedin_check_session": ("GET", "/check"),
+    "linkedin_login": ("POST", "/login"),
+    "linkedin_save_session": ("POST", "/save"),
+    "linkedin_analyze_profile": ("GET", "/profile"),
+    "linkedin_clear_session": ("DELETE", "/session"),
+}
 
-async def run_stdio_server():
-    print(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}), flush=True)
+
+def background_base_url() -> str:
+    host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = os.environ.get("PORT", "8766").strip() or "8766"
+    return f"http://{host}:{port}"
+
+
+def http_call(method: str, path: str, timeout: float = 60.0) -> dict:
+    """Proxy a tool call to the background server. Never raises."""
+    url = background_base_url() + path
+    request = urllib.request.Request(url, method=method)
     try:
-        while True:
-            line = sys.stdin.readline()
-            if not line: break
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", "replace")
             try:
-                message = json.loads(line.strip())
-                response = await handle_message(message)
-                if response: print(json.dumps(response, ensure_ascii=False), flush=True)
-            except json.JSONDecodeError as e:
-                print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {e}"}}), flush=True)
-    except Exception as e:
-        print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": f"Internal error: {e}"}}), flush=True)
+                return json.loads(body)
+            except (ValueError, TypeError):
+                return {"error": f"Non-JSON response from {url}: {body[:200]}"}
+    except urllib.error.HTTPError as error:
+        try:
+            return json.loads(error.read().decode("utf-8", "replace"))
+        except (ValueError, TypeError):
+            return {"error": f"Background server HTTP {error.code} from {url}"}
+    except Exception as error:  # noqa: BLE001 - report any transport failure to the LLM
+        return {
+            "error": (
+                f"Background server unreachable at {url} ({error}). "
+                "It is starting up, not installed yet, or stopped. "
+                "Run the repo's install script once, or ./start-daemon.sh, then retry."
+            )
+        }
 
-async def main():
+
+def _text_result(data: dict) -> dict:
+    return {
+        "content": [
+            {"type": "text", "text": json.dumps(data, indent=2, ensure_ascii=False)}
+        ]
+    }
+
+
+def handle_message(message: dict):
+    """Return a response dict, None (no reply), or the sentinel EXIT."""
+    method = message.get("method", "")
+    msg_id = message.get("id")
+
+    # Notifications carry no id -> must never be answered.
+    if msg_id is None:
+        if method == "notifications/exit":
+            return "EXIT"
+        if method == "notifications/initialized":
+            return None
+        return None
+
+    if method == "initialize":
+        params = message.get("params", {}) or {}
+        requested = params.get("protocolVersion", PROTOCOL_VERSION)
+        chosen = requested if requested in KNOWN_PROTOCOL_VERSIONS else PROTOCOL_VERSION
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": chosen,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            },
+        }
+
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+
+    if method == "shutdown":
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
+
+    if method == "tools/call":
+        params = message.get("params", {}) or {}
+        name = params.get("name", "")
+        endpoint = TOOL_ENDPOINTS.get(name)
+        if endpoint is None:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {"code": -32602, "message": f"Unknown tool: {name}"},
+            }
+        method_verb, path = endpoint
+        return {"jsonrpc": "2.0", "id": msg_id, "result": _text_result(http_call(method_verb, path))}
+
+    if method in ("resources/list", "prompts/list"):
+        key = "resources" if method == "resources/list" else "prompts"
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {key: []}}
+
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
+    }
+
+
+def run_stdio_server() -> None:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except (ValueError, TypeError) as error:
+            _emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {error}"}})
+            continue
+        try:
+            response = handle_message(message)
+        except Exception as error:  # noqa: BLE001 - keep the stdio channel alive
+            if message.get("id") is not None:
+                _emit({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32603, "message": str(error)}})
+            continue
+        if response == "EXIT":
+            break
+        if response is not None:
+            _emit(response)
+
+
+def _emit(payload: dict) -> None:
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--stdio":
-        await run_stdio_server()
-    else:
-        print("Usage: python linkedin_mcp.py --stdio")
-        sys.exit(1)
+        run_stdio_server()
+        return
+    print("Usage: python linkedin_mcp.py --stdio")
+    sys.exit(1)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
