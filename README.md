@@ -200,7 +200,14 @@ old command).
 | `linkedin_save_session` | Persist the current session after a manual login |
 | `linkedin_get_profile` | Fetch the raw profile data (JSON) |
 | `linkedin_analyze_profile` | Fetch the profile data for analysis |
+| `linkedin_get_posts` | Fetch your own recent posts from the activity tab (`limit`/`scroll` query args) |
+| `linkedin_get_post` | Fetch one post by URL (`url` query arg, `urn:li:activity:...`) |
+| `linkedin_analyze_posts` | Fetch your posts for analysis (`limit`/`scroll` query args) |
 | `linkedin_clear_session` | Delete the saved session |
+
+Tool calls forward only whitelisted arguments (see `PARAM_WHITELIST` in
+`mcp-server/linkedin_mcp.py`) to the background server as query parameters;
+anything else in `arguments` is ignored.
 
 ## HTTP API (background server)
 
@@ -212,6 +219,8 @@ old command).
 | `/save` | POST | Persist the current session |
 | `/session` | DELETE | Clear the saved session |
 | `/profile` | GET | Full profile data (name, headline, about, experience, education, skills) |
+| `/posts` | GET | Own posts from the activity tab (`limit`, `scroll` query args) |
+| `/post` | GET | Single post by URL (`url` query arg, validated against `urn:li:activity:...`) |
 | `/debug`, `/debug/dom`, `/debug/selectors` | GET | Debugging aids |
 
 ## Security

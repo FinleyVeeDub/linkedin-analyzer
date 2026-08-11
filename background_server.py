@@ -14,6 +14,7 @@ v3 changes:
 import asyncio
 import json
 import os
+import re
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -310,6 +311,33 @@ class BrowserManager:
             await self.page.wait_for_timeout(180)
 
         await self.page.evaluate("window.scrollTo(0, 0)")
+        await self.page.wait_for_timeout(1000)
+        return True
+
+    async def navigate_to_activity(self, locale: str = "de") -> bool:
+        """Navigate to the current user's recent activity tab (own posts)."""
+        base_url = f"{settings.LINKEDIN_URL}/in/me/recent-activity/all/"
+        activity_url = base_url if locale == "de" else f"{base_url}?locale=en_US"
+
+        await self._goto_with_fallback(activity_url)
+        await self.page.wait_for_timeout(1500)
+
+        consent_dismissed = await self.dismiss_cookie_consent()
+        has_banner = await self.has_cookie_banner()
+        if has_banner or consent_dismissed or self._is_consent_url(self.page.url):
+            await self._goto_with_fallback(activity_url)
+            await self.page.wait_for_timeout(1500)
+
+        if self._is_consent_url(self.page.url):
+            await self.recover_from_consent(locale=locale)
+            await self.page.wait_for_timeout(1000)
+
+        current_url = self.page.url
+        if any(seg in current_url for seg in ["/login", "/authwall", "/checkpoint"]):
+            return False
+        if self._is_consent_url(current_url):
+            return False
+
         await self.page.wait_for_timeout(1000)
         return True
 
@@ -698,6 +726,147 @@ PROFILE_PAGE_EXTRACTOR = """
     return result;
 }
 """
+
+
+POST_FEED_EXTRACTOR = """
+() => {
+    const result = [];
+    const seen = new Set();
+
+    let containers = Array.from(document.querySelectorAll('[data-urn*="urn:li:activity"]'));
+    if (containers.length === 0) {
+        containers = Array.from(
+            document.querySelectorAll('.feed-shared-update-v2, .feed-shared-update, article')
+        );
+    }
+
+    for (const el of containers) {
+        const fullText = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (!fullText || fullText.length < 20) continue;
+
+        const urnMatch = (el.getAttribute('data-urn') || '').match(/urn:li:activity:(\\d+)/);
+        const postId = urnMatch ? urnMatch[1] : null;
+        const url = postId
+            ? 'https://www.linkedin.com/feed/update/urn:li:activity:' + postId + '/'
+            : null;
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+
+        // Author: prefer the actor link's aria-label (e.g. "Name Surname - 1st"), fall back to visible text.
+        const actor = el.querySelector(
+            '[data-testid="main-feed-activity-header__actor-link"], ' +
+            '.update-components-actor__name, ' +
+            'a[href*="/in/"], a[href*="/company/"]'
+        );
+        let author = actor
+            ? (actor.getAttribute('aria-label') || actor.innerText || '').replace(/\\s+/g, ' ').trim()
+            : null;
+        if (author && author.length > 80) author = null;
+
+        // Timestamp: relative time like "1w" in the sub-description / <time> element.
+        const timeEl = el.querySelector(
+            'time, ' +
+            '[data-testid="main-feed-activity-header__sub-description"], ' +
+            '.update-components-actor__sub-description'
+        );
+        let timestamp = timeEl
+            ? (timeEl.innerText || timeEl.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim()
+            : null;
+
+        // Body: visible text of the post content, deduplicated in Python.
+        const bodyEl = el.querySelector(
+            '.feed-shared-inline-show-more-text, ' +
+            '[data-testid="main-feed-activity-card__title"], ' +
+            '.feed-shared-update-v2__description, ' +
+            '.update-components-text__child-wrapper'
+        );
+        const body = bodyEl ? (bodyEl.innerText || '').replace(/\\s+/g, ' ').trim() : fullText;
+
+        // Engagement counts. Best-effort: selectors can change, default to 0.
+        const reactionEl = el.querySelector(
+            '[data-testid="social-actions-bar__reaction-count"], ' +
+            '.social-details-social-counts__reactions-count'
+        );
+        const commentEl = el.querySelector(
+            '[data-testid="social-actions-bar__comments-count"], ' +
+            '.social-details-social-counts__comments'
+        );
+        const repostEl = el.querySelector(
+            '[data-testid="social-actions-bar__reposts-count"], ' +
+            '.social-details-social-counts__reposts'
+        );
+        const toInt = (node) => {
+            if (!node) return 0;
+            const s = (node.innerText || node.getAttribute('aria-label') || '').replace(/[^\\d]/g, '');
+            return parseInt(s, 10) || 0;
+        };
+
+        const hasMedia = !!el.querySelector(
+            'img[src*="media"], video, ' +
+            '.update-components-image, ' +
+            '[data-testid="main-feed-activity-card__image"], ' +
+            '.feed-shared-image'
+        );
+
+        result.push({
+            id: postId,
+            url: url,
+            author: author,
+            timestamp: timestamp,
+            text: body,
+            reactions: toInt(reactionEl),
+            comments: toInt(commentEl),
+            reposts: toInt(repostEl),
+            has_media: hasMedia,
+        });
+    }
+
+    return result;
+}
+"""
+
+
+async def _scrape_posts(page) -> dict:
+    """Extract the list of posts from the current feed/activity page."""
+    fields = await page.evaluate(POST_FEED_EXTRACTOR)
+    posts = []
+    for post in fields:
+        text = _deduplicate_text(post.get("text") or "")
+        if not text:
+            continue
+        posts.append({
+            "id": post.get("id"),
+            "url": post.get("url"),
+            "author": post.get("author"),
+            "timestamp": post.get("timestamp"),
+            "text": text,
+            "reactions": post.get("reactions", 0),
+            "comments": post.get("comments", 0),
+            "reposts": post.get("reposts", 0),
+            "has_media": post.get("has_media", False),
+        })
+    return {"count": len(posts), "posts": posts}
+
+
+async def _scrape_single_post(page) -> dict:
+    """Extract one post from a post detail page."""
+    fields = await page.evaluate(POST_FEED_EXTRACTOR)
+    for post in fields:
+        text = _deduplicate_text(post.get("text") or "")
+        if not text:
+            continue
+        return {
+            "id": post.get("id"),
+            "url": post.get("url"),
+            "author": post.get("author"),
+            "timestamp": post.get("timestamp"),
+            "text": text,
+            "reactions": post.get("reactions", 0),
+            "comments": post.get("comments", 0),
+            "reposts": post.get("reposts", 0),
+            "has_media": post.get("has_media", False),
+        }
+    return {"error": "No post content found at this URL."}
 
 
 async def _field_experience(page, profile_url: str) -> list:
@@ -1133,6 +1302,154 @@ async def profile(lang: str = "de"):
             return results.get(lang, results.get("de", {}))
 
         return results
+
+
+@app.get("/posts")
+async def posts(limit: int = 10, scroll: int = 3):
+    """
+    Get the current user's own posts from the activity tab.
+    limit: max number of posts to return (default 10).
+    scroll: number of lazy-load scroll passes over the feed (default 3).
+    """
+    if not browser_mgr:
+        return {"error": NOT_READY}
+    async with browser_mgr.page_lock:
+        if not await browser_mgr.check_login():
+            if browser_mgr.session_manager.has_valid_session():
+                try:
+                    await browser_mgr._goto_with_fallback(f"{settings.LINKEDIN_URL}/feed/")
+                    await browser_mgr.page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+            if not await browser_mgr.check_login():
+                return {"error": "Not logged in. Call POST /login first."}
+
+        try:
+            nav_ok = await browser_mgr.navigate_to_activity(locale="de")
+        except TargetClosedError:
+            # Browser window was closed underneath us – relaunch and retry once.
+            if not await browser_mgr.restart():
+                return {"error": "Browser closed and relaunch failed. Call POST /login."}
+            nav_ok = False
+        if not nav_ok:
+            try:
+                recovered = await browser_mgr.recover_from_consent(locale="de")
+            except TargetClosedError:
+                if not await browser_mgr.restart():
+                    return {"error": "Browser closed and relaunch failed. Call POST /login."}
+                recovered = False
+            if recovered:
+                nav_ok = await browser_mgr.navigate_to_activity(locale="de")
+        if not nav_ok:
+            return {
+                "error": "Session expired. LinkedIn redirected to login/authwall. "
+                         "Please call POST /login to re-authenticate."
+            }
+        if await browser_mgr.has_cookie_banner():
+            await browser_mgr.dismiss_cookie_consent()
+            await browser_mgr.page.wait_for_timeout(900)
+
+        # Scroll to trigger lazy loading of older posts.
+        try:
+            for _ in range(max(0, min(scroll, 10))):
+                await browser_mgr.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await browser_mgr.page.wait_for_timeout(1200)
+        except Exception:
+            pass
+
+        try:
+            data = await _scrape_posts(browser_mgr.page)
+        except Exception as e:
+            error_message = str(e)
+            if "Cookie consent page detected" in error_message:
+                recovered = await browser_mgr.recover_from_consent(locale="de")
+                if recovered:
+                    await browser_mgr.navigate_to_activity(locale="de")
+                    data = await _scrape_posts(browser_mgr.page)
+                else:
+                    data = {"error": f"Scraping failed: {error_message}"}
+            else:
+                data = {"error": f"Scraping failed: {error_message}"}
+
+        await browser_mgr.save()
+
+        if isinstance(data, dict) and "posts" in data:
+            capped = max(1, limit)
+            data["posts"] = data["posts"][:capped]
+            data["count"] = len(data["posts"])
+        return data
+
+
+@app.get("/post")
+async def post(url: str = ""):
+    """
+    Get one LinkedIn post by its URL.
+    Expected format: https://www.linkedin.com/feed/update/urn:li:activity:NNNNNN/
+    """
+    if not url:
+        return {"error": "Missing required parameter 'url'."}
+    if not re.search(r"linkedin\.com/feed/update/urn:li:activity:\d+", url):
+        return {
+            "error": "Invalid LinkedIn post URL. Expected format: "
+                     "https://www.linkedin.com/feed/update/urn:li:activity:NNNNNN/"
+        }
+
+    if not browser_mgr:
+        return {"error": NOT_READY}
+    async with browser_mgr.page_lock:
+        if not await browser_mgr.check_login():
+            if browser_mgr.session_manager.has_valid_session():
+                try:
+                    await browser_mgr._goto_with_fallback(f"{settings.LINKEDIN_URL}/feed/")
+                    await browser_mgr.page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+            if not await browser_mgr.check_login():
+                return {"error": "Not logged in. Call POST /login first."}
+
+        try:
+            await browser_mgr._goto_with_fallback(url)
+        except TargetClosedError:
+            if not await browser_mgr.restart():
+                return {"error": "Browser closed and relaunch failed. Call POST /login."}
+            await browser_mgr._goto_with_fallback(url)
+        await browser_mgr.page.wait_for_timeout(2000)
+
+        if await browser_mgr.has_cookie_banner():
+            await browser_mgr.dismiss_cookie_consent()
+            await browser_mgr.page.wait_for_timeout(900)
+
+        if browser_mgr._is_consent_url(browser_mgr.page.url):
+            recovered = await browser_mgr.recover_from_consent(locale="de")
+            if recovered:
+                await browser_mgr._goto_with_fallback(url)
+                await browser_mgr.page.wait_for_timeout(2000)
+
+        current_url = browser_mgr.page.url
+        if any(seg in current_url for seg in ["/login", "/authwall", "/checkpoint"]):
+            await browser_mgr.save()
+            return {
+                "error": "Session expired. LinkedIn redirected to login/authwall. "
+                         "Please call POST /login to re-authenticate."
+            }
+
+        try:
+            data = await _scrape_single_post(browser_mgr.page)
+        except Exception as e:
+            error_message = str(e)
+            if "Cookie consent page detected" in error_message:
+                recovered = await browser_mgr.recover_from_consent(locale="de")
+                if recovered:
+                    await browser_mgr._goto_with_fallback(url)
+                    await browser_mgr.page.wait_for_timeout(2000)
+                    data = await _scrape_single_post(browser_mgr.page)
+                else:
+                    data = {"error": f"Scraping failed: {error_message}"}
+            else:
+                data = {"error": f"Scraping failed: {error_message}"}
+
+        await browser_mgr.save()
+        return data
 
 
 # ---------------------------------------------------------------------------

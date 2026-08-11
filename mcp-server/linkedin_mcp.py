@@ -19,10 +19,11 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 SERVER_NAME = "linkedin-analyzer"
-SERVER_VERSION = "2.0.0"
+SERVER_VERSION = "2.1.0"
 PROTOCOL_VERSION = "2024-11-05"
 KNOWN_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
 
@@ -53,6 +54,42 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "linkedin_get_posts",
+        "description": "Get your own recent LinkedIn posts from the activity tab "
+                     "(text, author, timestamp, reactions/comments/reposts, post URL).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max posts to return (default 10)."},
+                "scroll": {"type": "integer", "description": "Lazy-load scroll passes (default 3)."},
+            },
+        },
+    },
+    {
+        "name": "linkedin_get_post",
+        "description": "Get one LinkedIn post by URL, e.g. "
+                     "https://www.linkedin.com/feed/update/urn:li:activity:NNNNNN/",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Full LinkedIn post URL."},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "linkedin_analyze_posts",
+        "description": "Get your recent LinkedIn posts with an analysis prompt "
+                     "(which posts perform best and why).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max posts to return (default 10)."},
+                "scroll": {"type": "integer", "description": "Lazy-load scroll passes (default 3)."},
+            },
+        },
+    },
+    {
         "name": "linkedin_clear_session",
         "description": "Clear session.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -65,7 +102,18 @@ TOOL_ENDPOINTS = {
     "linkedin_login": ("POST", "/login"),
     "linkedin_save_session": ("POST", "/save"),
     "linkedin_analyze_profile": ("GET", "/profile"),
+    "linkedin_get_posts": ("GET", "/posts"),
+    "linkedin_get_post": ("GET", "/post"),
+    "linkedin_analyze_posts": ("GET", "/posts"),
     "linkedin_clear_session": ("DELETE", "/session"),
+}
+
+# Only these arguments are forwarded to the background server as query params.
+# Everything else in `arguments` is ignored (belt and braces against prompt injection).
+PARAM_WHITELIST = {
+    "linkedin_get_posts": {"limit", "scroll"},
+    "linkedin_get_post": {"url"},
+    "linkedin_analyze_posts": {"limit", "scroll"},
 }
 
 
@@ -174,7 +222,22 @@ def handle_message(message: dict):
                 "error": {"code": -32602, "message": f"Unknown tool: {name}"},
             }
         method_verb, path = endpoint
-        return {"jsonrpc": "2.0", "id": msg_id, "result": _text_result(http_call(method_verb, path))}
+        query = ""
+        whitelist = PARAM_WHITELIST.get(name, set())
+        if whitelist:
+            arguments = params.get("arguments", {}) or {}
+            if isinstance(arguments, dict):
+                filtered = {
+                    key: value for key, value in arguments.items()
+                    if key in whitelist and value is not None
+                }
+                if filtered:
+                    query = "?" + urllib.parse.urlencode(filtered)
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": _text_result(http_call(method_verb, path + query)),
+        }
 
     if method in ("resources/list", "prompts/list"):
         key = "resources" if method == "resources/list" else "prompts"
