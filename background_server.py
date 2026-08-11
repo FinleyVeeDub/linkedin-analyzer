@@ -42,7 +42,7 @@ class BrowserManager:
         self.page_lock = asyncio.Lock()
 
     async def start(self) -> bool:
-        if self.browser and not self.browser.is_closed():
+        if self.browser and self.browser.is_connected():
             return False  # already running
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(
@@ -357,13 +357,19 @@ class BrowserManager:
                 await self.playwright.stop()
         except Exception:
             pass
+        finally:
+            self.page = None
+            self.context = None
+            self.browser = None
+            self.playwright = None
 
     async def restart(self) -> bool:
         """Full teardown + fresh launch. Returns True if the browser restarted."""
         await self.stop()
         try:
             return await self.start()
-        except Exception:
+        except Exception as e:
+            print(f"Browser restart failed: {e}", flush=True)
             return False
 
 
@@ -1030,7 +1036,9 @@ async def _field_profile_picture(page) -> str | None:
 def health():
     return {
         "status": "ok",
-        "browser_open": browser_mgr.browser is not None if browser_mgr else False,
+        "browser_open": (
+            browser_mgr.browser.is_connected() if browser_mgr and browser_mgr.browser else False
+        ),
     }
 
 
