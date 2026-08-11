@@ -5,6 +5,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
 LOG_FILE="$SCRIPT_DIR/background_server.log"
 PID_FILE="$SCRIPT_DIR/background_server.pid"
+
+# Read .env (project root) so PORT/HOST from .env are honored when this script
+# is run directly. Never overrides variables already set in the environment.
+load_dotenv() {
+  local env_file="$SCRIPT_DIR/.env"
+  [ -f "$env_file" ] || return 0
+  local line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    [ -z "$line" ] && continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      [A-Za-z_]*[A-Za-z0-9_]*) ;;
+      *) continue ;;
+    esac
+    [ -n "${!key:-}" ] && continue
+    export "$key=$value"
+  done < "$env_file"
+}
+load_dotenv
+
 export PORT="${PORT:-8766}"
 
 if [ ! -x "$VENV_PYTHON" ]; then

@@ -103,26 +103,32 @@ timeout; the first tool call may answer "not ready yet" for a few seconds.
 
 > [!INFO] Port `8766` may already be occupied
 >
-> `8766` is only the **default** port of the background server. On machines
-> where another service already binds it (e.g. the **Hermes** agent reserves
-> `8766`, in which case the analyzer was moved to `8767`), LM Studio simply
-> cannot reach the daemon and the MCP tools fail with a connection error.
-> Fix: pick a free port and set `PORT` **in `.env`** before starting, e.g.
-> `PORT=8767`. The change is picked up on the next `start-daemon.sh` / LM
-> Studio restart — nothing else needs to be edited.
+> `.env` is the **single source of truth** for the port — nothing needs to be
+> edited in code. Every component reads it: `config.py` (pydantic-settings),
+> `background_server.py` (`settings.PORT`), `linkedin_mcp.py` (stdlib dotenv
+> reader), and all scripts (`start-daemon.sh`, the LM Studio wrapper,
+> `bootstrap.sh`, `install.sh`) source `.env` before using `PORT`. A real
+> environment variable always wins over `.env`.
 >
-> **Where the `8766` fallback is hard-coded** (if you ever need to change the
-> default itself, not just override it):
+> On machines where another service already binds `8766` (e.g. the **Hermes**
+> agent reserves `8766`, in which case the analyzer was moved to `8767`), LM
+> Studio cannot reach the daemon and the MCP tools fail with a connection
+> error. Fix: pick a free port and set `PORT` **in `.env`**, e.g.
+> `PORT=8767`, then restart `start-daemon.sh` and LM Studio.
+>
+> **The `8766` fallback default** (only used when `PORT` is set neither in
+> `.env` nor as an environment variable — change it here only if you want a
+> different default for everyone):
 >
 > | File | Line | Usage |
 > |------|------|-------|
 > | `config.py` | 13 | Pydantic default for `PORT` |
-> | `background_server.py` | 1143 | Daemon bind port (`PORT` env, fallback `8766`) |
-> | `mcp-server/linkedin_mcp.py` | 74 | MCP server's base URL to the daemon (`PORT` env, fallback `8766`) |
+> | `background_server.py` | 1143 | Daemon bind port (`settings.PORT`) |
+> | `mcp-server/linkedin_mcp.py` | 92 | MCP server's base URL to the daemon |
 > | `scripts/linkedin-analyzer-mcp-wrapper.sh` | 50 | Wrapper default |
 > | `scripts/bootstrap.sh` | 39 | Bootstrap default |
 > | `scripts/install.sh` | 40 | Service install default |
-> | `start-daemon.sh` | 8 | Daemon start default |
+> | `start-daemon.sh` | 30 | Daemon start default |
 > | `.env.example` | 6 | Documented default |
 
 ## Running

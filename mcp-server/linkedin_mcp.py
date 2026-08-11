@@ -69,6 +69,24 @@ TOOL_ENDPOINTS = {
 }
 
 
+def load_dotenv() -> None:
+    """Best-effort .env reader (stdlib only). Never overrides real env vars."""
+    try:
+        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+        with open(env_file, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                if not key.isidentifier() or key in os.environ:
+                    continue
+                os.environ[key] = value.split("#")[0].strip().strip('"').strip("'")
+    except OSError:
+        pass
+
+
 def background_base_url() -> str:
     host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
     port = os.environ.get("PORT", "8766").strip() or "8766"
@@ -197,6 +215,7 @@ def _emit(payload: dict) -> None:
 
 
 def main() -> None:
+    load_dotenv()
     if len(sys.argv) > 1 and sys.argv[1] == "--stdio":
         run_stdio_server()
         return

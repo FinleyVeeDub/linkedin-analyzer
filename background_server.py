@@ -1140,5 +1140,5 @@ async def profile(lang: str = "de"):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8766))
+    port = settings.PORT  # .env (via config.py) or PORT env var; default 8766
     uvicorn.run(app, host="0.0.0.0", port=port)

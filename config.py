@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     MCP_SERVER_NAME: str = "linkedin-analyzer"
 
     class Config:
-        env_file = ".env"
+        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
         env_file_encoding = "utf-8"
 
 
